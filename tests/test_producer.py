@@ -17,6 +17,14 @@ def test_extract_prose_without_mdx_has_no_query():
     assert "select" not in out.lower()  # nothing that safe_mdx would accept as a query
 
 
+def test_extract_ignores_prose_select_keeps_real_statement():
+    # a preamble containing the word "select"/"with" must NOT be prepended to the MDX
+    raw = "To answer this, I will select the Sales measure:\n\nSELECT [Measures].[Sales] ON 0 FROM [C]"
+    assert extract_mdx(raw) == "SELECT [Measures].[Sales] ON 0 FROM [C]"
+    raw2 = "Sure, here is the query with the total:\n```mdx\nSELECT [Measures].[X] ON 0 FROM [C]\n```"
+    assert extract_mdx(raw2) == "SELECT [Measures].[X] ON 0 FROM [C]"
+
+
 class _LLM:
     """Records prompts; returns a deterministic MDX per call."""
     def __init__(self):

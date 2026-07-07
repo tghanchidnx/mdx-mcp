@@ -66,6 +66,12 @@ class XMLAClient:
         if fault is not None:
             msg = "".join(fault.itertext()).strip()
             raise XMLAError(f"XMLA SOAP fault: {msg[:300]}")
+        # SSAS reports query errors IN-BAND (HTTP 200) as <Messages><Error .../></Messages>,
+        # not as a SOAP Fault — surface those instead of laundering them into a silent None.
+        for el in root.iter():
+            if _local(el.tag) in ("Error", "Exception"):
+                desc = el.get("Description") or "".join(el.itertext()).strip()
+                raise XMLAError(f"XMLA query error: {desc[:300]}")
         return root
 
     def _props(self, extra: str = "") -> str:
@@ -102,7 +108,14 @@ class XMLAClient:
 
 # -- pure parsers (unit-tested without a live server) ----------------------
 def parse_first_cell(root: ET.Element) -> Optional[float]:
-    """Return the first ``<Cell><Value>`` in an mddataset as float, or None."""
+    """Return the sole ``<Cell><Value>`` in an mddataset as float, or None.
+
+    A multi-cell result means the MDX was not the single-cell query we asked for — return
+    None (a non-scalar must not silently 'vote' as if it were one value).
+    """
+    cells = [c for c in root.iter() if _local(c.tag) == "Cell"]
+    if len(cells) > 1:
+        return None
     for value in root.iter(f"{{{_MDD}}}Value"):
         text = (value.text or "").strip()
         if text == "":

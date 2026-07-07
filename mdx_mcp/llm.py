@@ -7,9 +7,10 @@ recommended default (Anthropic). OSS users can supply any implementation (OpenAI
 from __future__ import annotations
 
 import os
-from typing import Optional, Protocol
+from typing import Optional, Protocol, runtime_checkable
 
 
+@runtime_checkable
 class LLMClient(Protocol):
     """Complete a prompt into text (the model returns bare MDX, per the producer prompt)."""
 

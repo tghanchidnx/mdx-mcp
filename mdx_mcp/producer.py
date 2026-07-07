@@ -25,10 +25,17 @@ _FENCE = re.compile(r"^```[a-zA-Z]*\n?|```$", re.MULTILINE)
 
 
 def extract_mdx(raw: str) -> str:
-    """Strip markdown fences / stray prose, returning the bare MDX statement."""
+    """Strip markdown fences / stray prose, returning the bare MDX statement.
+
+    Anchors to a statement head at the START of a line (``^\\s*(WITH|SELECT)``) so a prose
+    preamble like "I will *select* the measure:\\n\\nSELECT ..." doesn't get matched on the
+    prose word. Falls back to the first inline SELECT/WITH only if no line-anchored head
+    exists.
+    """
     text = _FENCE.sub("", raw or "").strip()
-    # keep from the first SELECT/WITH onward if the model added a preamble
-    m = re.search(r"(?is)\b(with|select)\b", text)
+    m = re.search(r"(?im)^\s*(with|select)\b", text)
+    if not m:
+        m = re.search(r"(?is)\b(with|select)\b", text)  # fallback: single-line output
     if m:
         text = text[m.start():]
     return text.strip().rstrip(";").strip()

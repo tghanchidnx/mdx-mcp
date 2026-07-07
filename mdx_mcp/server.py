@@ -23,8 +23,12 @@ from .verify import SelfConsistencyVerifier
 
 
 def _password() -> Optional[str]:
+    # File-based secret takes precedence. If the FILE is configured but missing, FAIL — do
+    # NOT silently degrade to MDX_MCP_PASSWORD / no-auth (file-based-secrets convention).
     path = os.environ.get("MDX_MCP_PASSWORD_FILE")
-    if path and os.path.exists(path):
+    if path:
+        if not os.path.exists(path):
+            raise RuntimeError(f"MDX_MCP_PASSWORD_FILE is set but not found: {path}")
         with open(path, encoding="utf-8") as fh:
             return fh.read().strip()
     return os.environ.get("MDX_MCP_PASSWORD")
@@ -57,14 +61,22 @@ def _cube_skills() -> str:
     return _introspector().skills()
 
 
-def build_server():
-    """Construct the FastMCP server with the four read-only tools."""
+def build_server(*, llm=None, producer=None, verifier=None, executor_factory=None):
+    """Construct the FastMCP server with the four read-only tools.
+
+    The three open-core seams are injectable so a private trust layer plugs in WITHOUT
+    forking: pass ``verifier=`` (e.g. a calibrated gate), ``llm=`` (any provider),
+    ``producer=``, or ``executor_factory=`` (e.g. a Windows ADOMD backend). Each defaults to
+    the OSS implementation. ``executor_factory() -> MdxExecutor`` is a callable so a fresh,
+    correctly-configured executor is built per request.
+    """
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("mdx-mcp")
-    llm = ClaudeClient()
-    producer = MdxProducer(llm)
-    verifier = SelfConsistencyVerifier()
+    llm = llm or ClaudeClient()
+    producer = producer or MdxProducer(llm)
+    verifier = verifier or SelfConsistencyVerifier()
+    make_executor = executor_factory or _executor
 
     @mcp.tool()
     def mdx_introspect() -> str:
@@ -72,23 +84,25 @@ def build_server():
         return _cube_skills()
 
     @mcp.tool()
-    def mdx_ask(question: str, k: int = 0) -> dict:
+    def mdx_ask(question: str, k: Optional[int] = None) -> dict:
         """Answer a natural-language question with a verified MDX result.
 
         Introspects the cube, generates k candidate MDX queries, executes them read-only,
         and returns the self-consistency verdict: {status: answer|abstain|clarify, value, mdx,
-        agreement, ...}. Never guesses a number when candidates disagree.
+        agreement, errors, ...}. Never guesses a number when candidates disagree or fail.
         """
-        k = k or int(os.environ.get("MDX_MCP_K", "3"))
+        if k is None:
+            k = int(os.environ.get("MDX_MCP_K", "3"))
         candidates = producer.candidates(question, _cube_skills(), k=k)
-        answer = verifier.verify(candidates, _executor())
+        answer = verifier.verify(candidates, make_executor())
         return answer.to_dict()
 
     @mcp.tool()
     def mdx_run(mdx: str) -> dict:
         """Execute a provided MDX query (read-only; SELECT/WITH only) and return the cell value."""
-        value = _executor().run(safe_mdx(mdx))
-        return {"mdx": safe_mdx(mdx), "value": value}
+        guarded = safe_mdx(mdx)  # raises UnsafeMdxError on a write/batch — surfaced to the client
+        value = make_executor().run(guarded)
+        return {"mdx": guarded, "value": value}
 
     @mcp.tool()
     def mdx_explain(mdx: str) -> str:

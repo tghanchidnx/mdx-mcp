@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # XMLA executor + introspection use only the stdlib. The MCP server needs `mcp`.
-dependencies = ["mcp>=1.2.0"]
+dependencies = ["mcp>=1.2.0,<2"]
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.40.0"]
