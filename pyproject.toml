@@ -28,8 +28,8 @@ dev = ["pytest>=8.0"]
 mdx-mcp = "mdx_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/OWNER/mdx-mcp"
-Source = "https://github.com/OWNER/mdx-mcp"
+Homepage = "https://github.com/tghanchidnx/mdx-mcp"
+Source = "https://github.com/tghanchidnx/mdx-mcp"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mdx_mcp"]
