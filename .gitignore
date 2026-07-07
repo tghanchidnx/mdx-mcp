@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+.env
+*.env
+# never commit deployment secrets / client configs
+secrets/
+*.pem
+*_PASSWORD*
