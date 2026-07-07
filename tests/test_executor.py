@@ -35,6 +35,34 @@ def test_safe_mdx_rejects_select_with_embedded_write():
         safe_mdx("SELECT [Measures].[X] ON 0 FROM [C] ; DROP CUBE [C]")
 
 
+@pytest.mark.parametrize("mdx", [
+    # multi-statement batching is the SCOPE/write-injection vector — reject even if both look read
+    "SELECT 1 ON 0 FROM [C]; SCOPE([Measures].[X]); THIS = 100; END SCOPE",
+    "SELECT [Measures].[X] ON 0 FROM [C]; SELECT [Measures].[Y] ON 0 FROM [C]",
+    "SELECT 1 ON 0 FROM [C] ; SET [Measures].[X] = 5",
+])
+def test_safe_mdx_rejects_statement_batching(mdx):
+    with pytest.raises(UnsafeMdxError):
+        safe_mdx(mdx)
+
+
+@pytest.mark.parametrize("mdx", [
+    "SELECT [Measures].[Drop-off Rate] ON 0 FROM [C]",
+    "SELECT [Measures].[Update Log] ON 0 FROM [C]",
+    "SELECT [Measures].[Create Date] ON 0 FROM [C]",
+    "SELECT [Measures].[Deleted Flag] ON 0 FROM [C]",
+    "WITH MEMBER [Measures].[Insert Rate] AS 1 SELECT [Measures].[Insert Rate] ON 0 FROM [C]",
+])
+def test_safe_mdx_allows_member_names_containing_keywords(mdx):
+    # false-positive fix: a keyword INSIDE a bracketed name must not block a read-only query
+    assert safe_mdx(mdx)
+
+
+def test_safe_mdx_masks_string_literals_with_semicolons():
+    # a ';' inside a string literal is not statement batching
+    assert safe_mdx("WITH MEMBER [Measures].[M] AS 'a;b' SELECT [Measures].[M] ON 0 FROM [C]")
+
+
 def test_executor_guards_before_calling_backend(monkeypatch):
     ex = XMLAExecutor("http://x/olap", "DB")
     called = {"n": 0}
