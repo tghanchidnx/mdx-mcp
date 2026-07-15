@@ -7,6 +7,7 @@ An optional ADOMD backend (Windows/.NET) can be added by implementing the same P
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
 from ._xmla import XMLAClient
@@ -53,11 +54,28 @@ def safe_mdx(mdx: str) -> str:
     return text
 
 
+@dataclass(frozen=True)
+class Cell:
+    """One cell of a full MDX cellset: its axis-member captions + numeric value.
+
+    ``members`` is the tuple of member captions (Axis0 first, then Axis1, ...; the
+    slicer/WHERE axis is never included) that this cell's coordinates resolve to.
+    ``value`` mirrors the scalar ``run`` contract: ``None`` for an empty/non-numeric cell.
+    """
+
+    members: tuple[str, ...]
+    value: Optional[float]
+
+
 @runtime_checkable
 class MdxExecutor(Protocol):
     """Execute a read-only MDX statement, returning the first cell as float | None."""
 
     def run(self, mdx: str) -> Optional[float]:  # pragma: no cover - protocol
+        ...
+
+    def run_cells(self, mdx: str) -> list[Cell]:  # pragma: no cover - protocol
+        """Execute a read-only MDX statement, returning the FULL cellset (all cells)."""
         ...
 
 
@@ -71,3 +89,6 @@ class XMLAExecutor:
 
     def run(self, mdx: str) -> Optional[float]:
         return self._client.execute(safe_mdx(mdx))
+
+    def run_cells(self, mdx: str) -> list[Cell]:
+        return self._client.execute_cells(safe_mdx(mdx))
