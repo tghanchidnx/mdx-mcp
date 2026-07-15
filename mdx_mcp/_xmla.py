@@ -1,14 +1,17 @@
 """Minimal, dependency-free XMLA (SOAP) client — cross-platform.
 
 Talks to any XMLA endpoint (SSAS multidimensional over HTTP/msmdpump, Mondrian, etc.)
-using only the stdlib (urllib). Two operations:
+using only the stdlib (urllib). Three operations:
 
 * ``execute(mdx)``  — an ``Execute`` command; returns the first cell value (scalar answers).
+* ``execute_cells(mdx)`` — the same ``Execute`` command, but decodes the FULL cellset (every
+  axis-member tuple + value) — rankings/breakdowns, not just "one number".
 * ``discover(rowset, restrictions)`` — a ``Discover`` request; returns a list of row dicts
   (used by the introspector to read cube schema rowsets).
 
-Scalar-answer focus: NL→MDX questions target "one number", so ``execute`` parses the first
-``<Cell><Value>`` from the returned mddataset. Not a full cellset reader — by design.
+Most NL→MDX questions target "one number", so ``execute`` parses only the first
+``<Cell><Value>`` from the returned mddataset — cheap and sufficient for scalar answers.
+``execute_cells`` is the full cellset reader for when the answer is a list, not a scalar.
 """
 from __future__ import annotations
 
@@ -93,6 +96,20 @@ class XMLAClient:
         root = self._post(body, "Execute")
         return parse_first_cell(root)
 
+    def execute_cells(self, mdx: str) -> "list":
+        """Run an MDX statement; return the FULL cellset as ordered ``Cell`` records.
+
+        Companion to :meth:`execute` for multi-cell results (rankings/breakdowns) — same
+        request, but every cell is decoded instead of only the first.
+        """
+        body = (
+            f'<Execute xmlns="{_XMLA}">'
+            f"<Command><Statement>{_xml_escape(mdx)}</Statement></Command>"
+            f"{self._props()}</Execute>"
+        )
+        root = self._post(body, "Execute")
+        return parse_cells(root)
+
     def discover(self, rowset: str, restrictions: Optional[dict[str, str]] = None) -> list[dict[str, Any]]:
         """Run a Discover request for a schema rowset; return row dicts."""
         rlist = "".join(f"<{k}>{_xml_escape(v)}</{k}>" for k, v in (restrictions or {}).items())
@@ -128,6 +145,95 @@ def parse_first_cell(root: ET.Element) -> Optional[float]:
     for cell in root.iter():
         if cell.tag.endswith("}Value") or cell.tag == "Value":
             text = (cell.text or "").strip()
+            try:
+                return float(text)
+            except ValueError:
+                return None
+    return None
+
+
+def parse_cells(root: ET.Element) -> "list":
+    """Return EVERY cell in an mddataset as ordered ``Cell`` records (full cellset).
+
+    Companion to ``parse_first_cell``: that function deliberately parses only the sole
+    cell of a scalar answer; this one decodes the whole result — the shape a
+    ranking/breakdown query returns.
+
+    XMLA reports axis member captions separately from cell values: ``<Axes>`` holds one
+    ``<Axis>`` per query axis (``Axis0``, ``Axis1``, ... in order; ``SlicerAxis`` — the
+    WHERE clause — is excluded, since it is constant across every cell and not part of any
+    cell's identity), each with its ``<Tuple>``s of ``<Member><Caption>``. ``<CellData>``
+    then holds one ``<Cell CellOrdinal="N">`` per cell. ``CellOrdinal`` is a mixed-radix
+    index over the axis sizes with Axis0 varying fastest (the XMLA convention); this
+    decodes that ordinal back into a per-axis tuple index and concatenates each axis's
+    member captions (Axis0 first, then Axis1, ...) into the cell's ``members`` tuple.
+    """
+    from .executor import Cell  # deferred: executor.py imports this module at load time
+
+    axes = _parse_axes(root)
+    sizes = [len(a) for a in axes]
+
+    cells: list[Cell] = []
+    for position, cell_el in enumerate(_iter_cell_elements(root)):
+        ordinal_attr = cell_el.get("CellOrdinal")
+        ordinal = int(ordinal_attr) if ordinal_attr is not None else position
+        members: list[str] = []
+        remainder = ordinal
+        for axis_tuples, size in zip(axes, sizes):
+            if size == 0:
+                continue
+            idx = remainder % size
+            remainder //= size
+            members.extend(axis_tuples[idx])
+        cells.append(Cell(members=tuple(members), value=_cell_value(cell_el)))
+    return cells
+
+
+def _iter_cell_elements(root: ET.Element) -> list[ET.Element]:
+    """All ``<Cell>`` elements under ``<CellData>``, in document order."""
+    return [el for el in root.iter() if _local(el.tag) == "Cell"]
+
+
+def _parse_axes(root: ET.Element) -> "list[list[tuple[str, ...]]]":
+    """Non-slicer ``<Axis>``es, each as an ordered list of per-tuple member captions."""
+    axes_el = None
+    for el in root.iter():
+        if _local(el.tag) == "Axes":
+            axes_el = el
+            break
+    if axes_el is None:
+        return []
+    axes: list[list[tuple[str, ...]]] = []
+    for axis in axes_el:
+        if _local(axis.tag) != "Axis" or axis.get("name") == "SlicerAxis":
+            continue
+        tuples: list[tuple[str, ...]] = []
+        for tuple_el in axis.iter():
+            if _local(tuple_el.tag) != "Tuple":
+                continue
+            captions = []
+            for member in tuple_el:
+                if _local(member.tag) != "Member":
+                    continue
+                captions.append(_member_caption(member))
+            tuples.append(tuple(captions))
+        axes.append(tuples)
+    return axes
+
+
+def _member_caption(member: ET.Element) -> str:
+    for child in member:
+        if _local(child.tag) == "Caption":
+            return (child.text or "").strip()
+    return ""
+
+
+def _cell_value(cell_el: ET.Element) -> Optional[float]:
+    for child in cell_el:
+        if _local(child.tag) == "Value":
+            text = (child.text or "").strip()
+            if text == "":
+                return None
             try:
                 return float(text)
             except ValueError:
