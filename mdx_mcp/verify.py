@@ -96,7 +96,7 @@ class SelfConsistencyVerifier:
     """Run k candidates; a tolerant-majority cluster → answer, else abstain/clarify.
 
     ``min_agreement`` is the fraction of *executed* candidates that must land in the modal
-    value-cluster. ``min_executed`` is the minimum number of candidates that must return a
+    cellset-cluster. ``min_executed`` is the minimum number of candidates that must return a
     value before an answer is allowed (default 2 — one value can't corroborate itself).
     """
 
